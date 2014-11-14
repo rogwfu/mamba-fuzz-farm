@@ -4,6 +4,9 @@
 # Vagrantfile API/syntax version. Don't touch unless you know what you're doing!
 VAGRANTFILE_API_VERSION = "2"
 
+# Define the number of nodes for the fuzzing cluster
+MAMBA_CLUSTER_SIZE = 1
+
 $chefUpdate = <<CHEF
   apt-get update
   /opt/ruby/bin/gem update chef --no-ri --no-rdoc
@@ -82,10 +85,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 #  end
 
   config.vm.provision "shell", inline: $chefUpdate
-#  config.vm.provision "shell", inline: $lldb
-#  config.vm.provision "shell", inline: $erlang
-#  config.vm.provision "shell", inline: $mongodb
-#  config.vm.provision "shell", inline: $mambaPython
+  config.vm.provision "shell", inline: $lldb
+  config.vm.provision "shell", inline: $erlang
+  config.vm.provision "shell", inline: $mongodb
+  config.vm.provision "shell", inline: $mambaPython
 
   # Enable provisioning with chef solo, specifying a cookbooks path, roles
   # path, and data_bags path (all relative to this Vagrantfile), and adding
@@ -116,12 +119,16 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
 	chef.log_level = :debug
 
-
-
   #   chef.cookbooks_path = "../my-recipes/cookbooks"
   #   chef.roles_path = "../my-recipes/roles"
   #   chef.data_bags_path = "../my-recipes/data_bags"
-  #   chef.add_recipe "mysql"
-  #   chef.add_role "web"
   end
+
+  # Define multiple boxes for the fuzzing cluster
+  MAMBA_CLUSTER_SIZE.times do |nodeNum|
+	config.vm.define "mamba-fuzzer-#{nodeNum}" do |node|
+	 node.vm.hostname = "mamba-fuzzer-#{nodeNum}" 
+	end
+  end
+
 end
