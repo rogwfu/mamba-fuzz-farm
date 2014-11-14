@@ -1,0 +1,13 @@
+DEPENDENCIES
+  apt
+  rvm
+    git: git://github.com/fnichol/chef-rvm.git
+    revision: 8a877e9b497f8fb06dfe6f5975561331b3924243
+
+GRAPH
+  apt (2.6.0)
+  chef_gem (0.1.0)
+  java (1.28.0)
+  rvm (0.10.1)
+    chef_gem (>= 0.0.0)
+    java (>= 0.0.0)
