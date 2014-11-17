@@ -11,7 +11,6 @@ $chefUpdate = <<CHEF
   apt-get update
   /opt/ruby/bin/gem update chef --no-ri --no-rdoc
   apt-get install -y gnupg
-  gpg --keyserver hkp://keys.gnupg.net --recv-keys D39DC0E3
 CHEF
 
 $lldb = <<LLDB
@@ -53,6 +52,7 @@ MONGODB
 
 # Python dependencies for mamba
 $mambaPython = <<MAMBAPY
+apt-get -y install git 
 apt-get -y install python-pip
 apt-get -y install python-dev
 apt-get -y install libevent-dev
@@ -72,6 +72,34 @@ service apport stop
 echo "/var/crash/core.%e.%p.%h.%t" > /proc/sys/kernel/core_pattern
 CRASH
 
+$mambaInstall = <<MAMBAINST
+gem install bundle
+gem install rake-compiler
+gem install jeweler
+cd $HOME
+git clone https://github.com/rogwfu/mamba.git
+cd mamba
+bundle install
+rake install
+MAMBAINST
+
+$rubyInstall = <<RVM
+  echo "install: --no-rdoc --no-ri" > ~/.gemrc 
+  echo "update:  --no-rdoc --no-ri" >> ~/.gemrc
+  gpg --keyserver hkp://keys.gnupg.net --recv-keys D39DC0E3
+  sudo apt-get -y install curl
+  curl -sSL https://get.rvm.io | bash
+  source ~/.bash_profile
+  rvm install 2.1.4
+  rvm use 2.1.4
+  rvm gemset create mamba
+  rvm use --default 2.1.4@mamba
+RVM
+
+$masterFuzzer = <<MASTER
+
+MASTER
+
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # All Vagrant configuration is done here. The most common configuration
   # options are documented and commented below. For a complete reference,
@@ -80,54 +108,35 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # Every Vagrant virtual environment requires a box to build off of.
   config.vm.box = "hashicorp/precise64"
 
-#  config.vm.provider "vmware_fusion" do |v|
-#	  v.gui = true
-#  end
+  config.vm.provider "vmware_fusion" do |v|
+	  v.gui = false 
+	  v.vmx["memsize"] = "4096"
+	  v.vmx["numvcpus"] = "2"
+  end
 
   config.vm.provision "shell", inline: $chefUpdate
   config.vm.provision "shell", inline: $lldb
   config.vm.provision "shell", inline: $erlang
   config.vm.provision "shell", inline: $mongodb
   config.vm.provision "shell", inline: $mambaPython
+  # For now install mamba from source, no official release yet
+  config.vm.provision "shell", :privileged => false, :inline => $rubyInstall
+  config.vm.provision "shell", :privileged => false, :inline => $mambaInstall
 
   # Enable provisioning with chef solo, specifying a cookbooks path, roles
   # path, and data_bags path (all relative to this Vagrantfile), and adding
   # some recipes and/or roles.
   #
-  config.vm.provision "chef_solo" do |chef|
-	chef.add_recipe "apt"
-	chef.add_recipe "rvm::vagrant"
-	chef.add_recipe "rvm::system"
-	chef.add_recipe "rvm::user"
-	chef.json = {
-		:rvm => {
-		 :install_rubies => true,
-         :rubies => ["2.1.3"],
-         :default_ruby => "2.1.3",
-         :vagrant => { :system_chef_solo => "/opt/chef/bin/chef-solo" },
-		 :global_gems => [
-		   {:name => 'bundler'},
-		   {:name => 'plympton'}
-		  ],
-		:user_installs => [{
-		  :user => "vagrant",
-		  :default_ruby => '2.1.4',
-		  :rubies => ['2.1.4']
-		}]
-      }
-	}
-
-	chef.log_level = :debug
-
-  #   chef.cookbooks_path = "../my-recipes/cookbooks"
-  #   chef.roles_path = "../my-recipes/roles"
-  #   chef.data_bags_path = "../my-recipes/data_bags"
-  end
 
   # Define multiple boxes for the fuzzing cluster
   MAMBA_CLUSTER_SIZE.times do |nodeNum|
 	config.vm.define "mamba-fuzzer-#{nodeNum}" do |node|
 	 node.vm.hostname = "mamba-fuzzer-#{nodeNum}" 
+	 # mamba-fuzzer-0 is always the fuzzing cluster master 
+	 # Setup the fuzzing job
+	 if node.vm.hostname == "mamba-fuzzer-0"
+		puts "Detected the master of the cluster"
+	 end
 	end
   end
 
