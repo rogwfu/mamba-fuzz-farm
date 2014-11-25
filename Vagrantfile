@@ -7,17 +7,32 @@ VAGRANTFILE_API_VERSION = "2"
 # Define the number of nodes for the fuzzing cluster
 MAMBA_CLUSTER_SIZE = 1
 
+# Definte Packages to Install
+TARGET_PACKAGES = "imagemagick"
+
+# Define Fuzzing Target 
+FUZZ_TARGET = "convert"
+
+# Define Fuzzing Target options
+FUZZ_TARG_OPTS = "cli#%s -resize 50% resize.jpg"
+
+# Define the fuzzer type
+FUZZ_TYPE = "Mangle"
+FUZZER_NAME = "my-new-fuzzer"
+FUZZER_TIMEOUT = "10"
+
 $chefUpdate = <<CHEF
   apt-get update
   /opt/ruby/bin/gem update chef --no-ri --no-rdoc
   apt-get install -y gnupg
+  apt-get install -y man-db
 CHEF
 
 $lldb = <<LLDB
 # Install LLDB APT Repository
 wget -O - http://llvm.org/apt/llvm-snapshot.gpg.key | apt-key add -
-echo "deb http://llvm.org/apt/trusty/ llvm-toolchain-trusty-3.4 main" > /etc/apt/llvm.list
-echo "deb-src http://llvm.org/apt/trusty/ llvm-toolchain-trusty-3.4 main" >> /etc/apt/llvm.list
+echo "deb http://llvm.org/apt/trusty/ llvm-toolchain-trusty-3.4 main" > /etc/apt/sources.list.d/llvm.list
+echo "deb-src http://llvm.org/apt/trusty/ llvm-toolchain-trusty-3.4 main" >> /etc/apt/sources.list.d/llvm.list
 apt-get update
 
 # Install llvm
@@ -40,6 +55,7 @@ dpkg -i erlang-solutions_1.0_all.deb
 apt-get -y update 
 apt-get -y install erlang
 apt-get -y install zip
+apt-get install -y xsltproc
 ERLANG
 
 # Mongodb installation
@@ -48,6 +64,7 @@ apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv 7F0CEB10
 echo 'deb http://downloads-distro.mongodb.org/repo/ubuntu-upstart dist 10gen' > /etc/apt/sources.list.d/mongodb.list
 apt-get update
 apt-get -y install mongodb-org
+service mongod stop
 MONGODB
 
 # Python dependencies for mamba
@@ -64,9 +81,15 @@ pip install lxml
 MAMBAPY
 
 $crashDetection = <<CRASH
-# Disable apport
-sed -i.bak s/enabled=1/enabled=0/g /etc/default/apport
-service apport stop
+if [ -f /etc/default/apport ] ; then
+  # Disable apport
+  sed -i.bak s/enabled=1/enabled=0/g /etc/default/apport
+  service apport stop
+else
+  # Create the missing directory since apport not installed
+  mkdir -p /var/crash
+  chmod 777 /var/crash
+fi
 
 # Setup core files
 echo "/var/crash/core.%e.%p.%h.%t" > /proc/sys/kernel/core_pattern
@@ -97,7 +120,24 @@ $rubyInstall = <<RVM
 RVM
 
 $masterFuzzer = <<MASTER
+  # Setup the new fuzzer
+  sudo apt-get -y install #{TARGET_PACKAGES}
+  mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} -d #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
+  cd #{FUZZER_NAME}
+  cp /vagrant/testcases/* tests/
 
+  # Package up the fuzzing configuration
+  thor fuzz:package
+  cp fz* /vagrant/
+
+  # Do all of this with tmuxinator
+  sudo apt-get -y install tmux
+  gem install tmuxinator
+  mkdir ~/.tmuxinator
+  cp /vagrant/configs/mamba_master.yml ~/.tmuxinator
+
+  # Start the fuzzing
+  mux mamba_master
 MASTER
 
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
@@ -119,9 +159,12 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   config.vm.provision "shell", inline: $erlang
   config.vm.provision "shell", inline: $mongodb
   config.vm.provision "shell", inline: $mambaPython
+  config.vm.provision "shell", inline: $crashDetection
+
   # For now install mamba from source, no official release yet
   config.vm.provision "shell", :privileged => false, :inline => $rubyInstall
   config.vm.provision "shell", :privileged => false, :inline => $mambaInstall
+  config.vm.provision "shell", :privileged => false, :inline => $masterFuzzer
 
   # Enable provisioning with chef solo, specifying a cookbooks path, roles
   # path, and data_bags path (all relative to this Vagrantfile), and adding
