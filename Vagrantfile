@@ -7,20 +7,35 @@ VAGRANTFILE_API_VERSION = "2"
 # Define the number of nodes for the fuzzing cluster
 MAMBA_CLUSTER_SIZE = 1
 
-# Definte Packages to Install
-TARGET_PACKAGES = "imagemagick"
-
 # Define Fuzzing Target 
-FUZZ_TARGET = "convert"
+FUZZ_TARGET = "objdump"
+
+# Definte Packages to Install
+# For Ubuntu find out what package provides the target by:
+# sudo apt-get -y install apt-file
+# apt-file update
+# apt-file search #{FUZZ_TARGET}
+TARGET_PACKAGES = "binutils"
 
 # Define Fuzzing Target options
-FUZZ_TARG_OPTS = "cli#%s -resize 50% resize.jpg"
+FUZZ_TARG_OPTS = "cli#-x -D"
 
 # Define the fuzzer type
-FUZZ_TYPE = "Mangle"
+FUZZ_TYPE = "SimpleGeneticAlgorithm"
 FUZZER_NAME = "my-new-fuzzer"
 FUZZER_TIMEOUT = "10"
 
+# Genetic Parameters
+CrossoverRate = "0.1"
+MutationRate = "0.2"
+MaxGens = "5"
+PopSize = "1314"
+FitnessFunction = "Ca + R"
+# Note: Be sure to escape /'s
+InitialPop = 'tests\/testset.zip'
+Disassembly = "disassemblies/libbfd-2.24-system.so.fz"
+# /usr/lib/libbfd-2.24-system.so
+#
 $chefUpdate = <<CHEF
   apt-get update
   /opt/ruby/bin/gem update chef --no-ri --no-rdoc
@@ -35,7 +50,7 @@ echo "deb http://llvm.org/apt/trusty/ llvm-toolchain-trusty-3.4 main" > /etc/apt
 echo "deb-src http://llvm.org/apt/trusty/ llvm-toolchain-trusty-3.4 main" >> /etc/apt/sources.list.d/llvm.list
 apt-get update
 
-# Install llvm
+# Install llvm/lldb
 apt-get -y install clang-3.4 clang-3.4-doc libclang-common-3.4-dev libclang-3.4-dev libclang1-3.4 libclang1-3.4-dbg libllvm-3.4-ocaml-dev libllvm3.4 libllvm3.4-dbg lldb-3.4 llvm-3.4 llvm-3.4-dev llvm-3.4-doc llvm-3.4-examples llvm-3.4-runtime clang-modernize-3.4 clang-format-3.4 python-clang-3.4 lldb-3.4-dev
 
 # Fix lldb python issue 
@@ -122,22 +137,31 @@ RVM
 $masterFuzzer = <<MASTER
   # Setup the new fuzzer
   sudo apt-get -y install #{TARGET_PACKAGES}
-  mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} -d #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
+#  mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} -d #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
+  mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
   cd #{FUZZER_NAME}
+
+  # Copy the initial testset
   cp /vagrant/testcases/* tests/
+
+  # Copy the disassembly
+  cp /vagrant/disassemblies/* disassemblies/
+
+  # Fixup the genetic parameters
+  sed -i 's/Crossover Rate: 0.2/Crossover Rate: #{CrossoverRate}/' ./configs/*Genetic* 
+  sed -i 's/Mutation Rate: 0.5/Mutation Rate: #{MutationRate}/' ./configs/*Genetic* 
+  sed -i 's/Maximum Generations: 2/Maximum Generations: #{MaxGens}/' ./configs/*Genetic* 
+  sed -i 's/Population Size: 4/Population Size: #{PopSize}/' ./configs/*Genetic* 
+  sed -i 's/Fitness Function: As/Fitness Function: #{FitnessFunction}/' ./configs/*Genetic* 
+#  sed -i 's/Initial Population: tests\/testset.zip/Initial Population: #{InitialPop}/' ./configs/*Genetic* 
+  sed -i '8d' ./configs/*Genetic*
+  sed -i '7i Disassembly: #{Disassembly}' ./configs/*Genetic* 
 
   # Package up the fuzzing configuration
   thor fuzz:package
   cp fz* /vagrant/
 
-  # Do all of this with tmuxinator
-  sudo apt-get -y install tmux
-  gem install tmuxinator
-  mkdir ~/.tmuxinator
-  cp /vagrant/configs/mamba_master.yml ~/.tmuxinator
-
-  # Start the fuzzing
-  mux mamba_master
+  nohup thor fuzz:start
 MASTER
 
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
@@ -146,7 +170,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # please see the online documentation at vagrantup.com.
 
   # Every Vagrant virtual environment requires a box to build off of.
-  config.vm.box = "hashicorp/precise64"
+  config.vm.box = "chef/ubuntu-14.04"
 
   config.vm.provider "vmware_fusion" do |v|
 	  v.gui = false 
