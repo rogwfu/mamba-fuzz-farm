@@ -135,10 +135,15 @@ $rubyInstall = <<RVM
 RVM
 
 $masterFuzzer = <<MASTER
+  export CLUSTER_SIZE=#{MAMBA_CLUSTER_SIZE}
   # Setup the new fuzzer
   sudo apt-get -y install #{TARGET_PACKAGES}
-#  mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} -d #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
-  mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
+  if [[ $CLUSTER_SIZE -gt > 1 ]] ; then
+	mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} -d #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
+  else
+	mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
+  fi
+
   cd #{FUZZER_NAME}
 
   # Copy the initial testset
@@ -158,11 +163,28 @@ $masterFuzzer = <<MASTER
   sed -i '7i Disassembly: #{Disassembly}' ./configs/*Genetic* 
 
   # Package up the fuzzing configuration
-  thor fuzz:package
-  cp fz* /vagrant/
+  
+  if [[ $CLUSTER_SIZE -gt > 1 ]] ; then
+	thor fuzz:package
+	cp fz* /vagrant/
+	nohup thor distrib:start
+	sleep 10
+  fi
 
   nohup thor fuzz:start
 MASTER
+
+$slaveFuzzer = <<SLAVE
+  # Setup the new fuzzer
+  sudo apt-get -y install #{TARGET_PACKAGES}
+  mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} -d #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
+
+  cd #{FUZZER_NAME}
+
+  cp fz* /vagrant/
+  thor fuzz:unpackage fz*
+  nohup thor fuzz:start
+SLAVE
 
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # All Vagrant configuration is done here. The most common configuration
@@ -188,7 +210,6 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # For now install mamba from source, no official release yet
   config.vm.provision "shell", :privileged => false, :inline => $rubyInstall
   config.vm.provision "shell", :privileged => false, :inline => $mambaInstall
-  config.vm.provision "shell", :privileged => false, :inline => $masterFuzzer
 
   # Enable provisioning with chef solo, specifying a cookbooks path, roles
   # path, and data_bags path (all relative to this Vagrantfile), and adding
@@ -203,6 +224,9 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 	 # Setup the fuzzing job
 	 if node.vm.hostname == "mamba-fuzzer-0"
 		puts "Detected the master of the cluster"
+		node.vm.provision "shell", :privileged => false, :inline => $masterFuzzer
+	 else
+		node.vm.provision "shell", :privileged => false, :inline => $slaveFuzzer
 	 end
 	end
   end
