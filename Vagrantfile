@@ -5,7 +5,7 @@
 VAGRANTFILE_API_VERSION = "2"
 
 # Define the number of nodes for the fuzzing cluster
-MAMBA_CLUSTER_SIZE = 1
+MAMBA_CLUSTER_SIZE = 2
 
 # Define Fuzzing Target 
 FUZZ_TARGET = "objdump"
@@ -23,20 +23,21 @@ FUZZ_TARG_OPTS = "cli#-x -D"
 # Define the fuzzer type
 FUZZ_TYPE = "SimpleGeneticAlgorithm"
 FUZZER_NAME = "my-new-fuzzer"
-FUZZER_TIMEOUT = "10"
+FUZZER_TIMEOUT = "5"
 
 # Genetic Parameters
 CrossoverRate = "0.1"
 MutationRate = "0.2"
 MaxGens = "5"
 PopSize = "1314"
-FitnessFunction = "Ca + R"
+FitnessFunction = "R"
 # Note: Be sure to escape /'s
 InitialPop = 'tests\/testset.zip'
 Disassembly = "disassemblies/libbfd-2.24-system.so.fz"
 # /usr/lib/libbfd-2.24-system.so
 #
 $chefUpdate = <<CHEF
+  set -x
   apt-get update
   /opt/ruby/bin/gem update chef --no-ri --no-rdoc
   apt-get install -y gnupg
@@ -44,6 +45,7 @@ $chefUpdate = <<CHEF
 CHEF
 
 $lldb = <<LLDB
+set -x
 # Install LLDB APT Repository
 wget -O - http://llvm.org/apt/llvm-snapshot.gpg.key | apt-key add -
 echo "deb http://llvm.org/apt/trusty/ llvm-toolchain-trusty-3.4 main" > /etc/apt/sources.list.d/llvm.list
@@ -62,6 +64,7 @@ LLDB
 
 # Erlang installation
 $erlang = <<ERLANG
+set -x
 # Grab the package for the repo
 wget https://packages.erlang-solutions.com/erlang-solutions_1.0_all.deb
 dpkg -i erlang-solutions_1.0_all.deb
@@ -75,6 +78,7 @@ ERLANG
 
 # Mongodb installation
 $mongodb = <<MONGODB
+set -x
 apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv 7F0CEB10
 echo 'deb http://downloads-distro.mongodb.org/repo/ubuntu-upstart dist 10gen' > /etc/apt/sources.list.d/mongodb.list
 apt-get update
@@ -84,6 +88,7 @@ MONGODB
 
 # Python dependencies for mamba
 $mambaPython = <<MAMBAPY
+set -x
 apt-get -y install git 
 apt-get -y install python-pip
 apt-get -y install python-dev
@@ -96,6 +101,7 @@ pip install lxml
 MAMBAPY
 
 $crashDetection = <<CRASH
+set -x
 if [ -f /etc/default/apport ] ; then
   # Disable apport
   sed -i.bak s/enabled=1/enabled=0/g /etc/default/apport
@@ -111,17 +117,19 @@ echo "/var/crash/core.%e.%p.%h.%t" > /proc/sys/kernel/core_pattern
 CRASH
 
 $mambaInstall = <<MAMBAINST
+set -x
 gem install bundle
 gem install rake-compiler
 gem install jeweler
 cd $HOME
-git clone https://github.com/rogwfu/mamba.git
+git clone -b simple-ga-distrib https://github.com/rogwfu/mamba.git
 cd mamba
 bundle install
 rake install
 MAMBAINST
 
 $rubyInstall = <<RVM
+  set -x
   echo "install: --no-rdoc --no-ri" > ~/.gemrc 
   echo "update:  --no-rdoc --no-ri" >> ~/.gemrc
   gpg --keyserver hkp://keys.gnupg.net --recv-keys D39DC0E3
@@ -134,57 +142,62 @@ $rubyInstall = <<RVM
   rvm use --default 2.1.4@mamba
 RVM
 
-$masterFuzzer = <<MASTER
+$fuzzer = <<FUZZER
+  set -x
   export CLUSTER_SIZE=#{MAMBA_CLUSTER_SIZE}
   # Setup the new fuzzer
   sudo apt-get -y install #{TARGET_PACKAGES}
-  if [[ $CLUSTER_SIZE -gt > 1 ]] ; then
-	mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} -d #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
-  else
-	mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
-  fi
-
-  cd #{FUZZER_NAME}
-
-  # Copy the initial testset
-  cp /vagrant/testcases/* tests/
-
-  # Copy the disassembly
-  cp /vagrant/disassemblies/* disassemblies/
-
-  # Fixup the genetic parameters
-  sed -i 's/Crossover Rate: 0.2/Crossover Rate: #{CrossoverRate}/' ./configs/*Genetic* 
-  sed -i 's/Mutation Rate: 0.5/Mutation Rate: #{MutationRate}/' ./configs/*Genetic* 
-  sed -i 's/Maximum Generations: 2/Maximum Generations: #{MaxGens}/' ./configs/*Genetic* 
-  sed -i 's/Population Size: 4/Population Size: #{PopSize}/' ./configs/*Genetic* 
-  sed -i 's/Fitness Function: As/Fitness Function: #{FitnessFunction}/' ./configs/*Genetic* 
-#  sed -i 's/Initial Population: tests\/testset.zip/Initial Population: #{InitialPop}/' ./configs/*Genetic* 
-  sed -i '8d' ./configs/*Genetic*
-  sed -i '7i Disassembly: #{Disassembly}' ./configs/*Genetic* 
-
-  # Package up the fuzzing configuration
   
-  if [[ $CLUSTER_SIZE -gt > 1 ]] ; then
-	thor fuzz:package
-	cp fz* /vagrant/
-	nohup thor distrib:start
-	sleep 10
+  # Check for the main fuzzer
+  if [[ "$HOSTNAME" == "mamba-fuzzer-0" ]] ; then
+	echo "Running inside the mamba-fuzzer-0"
+
+	# Is this a distributed job?
+	if [[ $CLUSTER_SIZE -gt 1 ]] ; then
+	  mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} -d #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
+	else
+	  mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
+	fi
+
+	cd #{FUZZER_NAME}
+
+	# Copy the initial testset
+	cp /vagrant/testcases/* tests/
+
+	# Copy the disassembly
+	cp /vagrant/disassemblies/* disassemblies/
+
+	# Fixup the genetic parameters
+	sed -i 's/Crossover Rate: 0.2/Crossover Rate: #{CrossoverRate}/' ./configs/*Genetic* 
+	sed -i 's/Mutation Rate: 0.5/Mutation Rate: #{MutationRate}/' ./configs/*Genetic* 
+	sed -i 's/Maximum Generations: 2/Maximum Generations: #{MaxGens}/' ./configs/*Genetic* 
+	sed -i 's/Population Size: 4/Population Size: #{PopSize}/' ./configs/*Genetic* 
+	sed -i 's/Fitness Function: As/Fitness Function: #{FitnessFunction}/' ./configs/*Genetic* 
+#	sed -i 's/Initial Population: tests\/testset.zip/Initial Population: #{InitialPop}/' ./configs/*Genetic* 
+	sed -i '8d' ./configs/*Genetic*
+	sed -i '7i Disassembly: #{Disassembly}' ./configs/*Genetic* 
+
+	# Package up the fuzzing configuration
+  
+	if [[ $CLUSTER_SIZE -gt 1 ]] ; then
+	  thor fuzz:package
+	  cp fz* /vagrant/
+	  nohup thor distrib:start
+	  sleep 10
+	fi
+
+	nohup thor fuzz:start
+  else
+	mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} -d #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
+
+	cd #{FUZZER_NAME}
+
+	cp /vagrant/fz* .
+	thor fuzz:unpackage fz*
+	nohup thor fuzz:start
   fi
 
-  nohup thor fuzz:start
-MASTER
-
-$slaveFuzzer = <<SLAVE
-  # Setup the new fuzzer
-  sudo apt-get -y install #{TARGET_PACKAGES}
-  mamba create -a `which #{FUZZ_TARGET}` -e '#{FUZZ_TARG_OPTS}' -y #{FUZZ_TYPE} -d #{FUZZER_NAME} -t #{FUZZER_TIMEOUT}
-
-  cd #{FUZZER_NAME}
-
-  cp fz* /vagrant/
-  thor fuzz:unpackage fz*
-  nohup thor fuzz:start
-SLAVE
+FUZZER
 
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # All Vagrant configuration is done here. The most common configuration
@@ -211,23 +224,11 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   config.vm.provision "shell", :privileged => false, :inline => $rubyInstall
   config.vm.provision "shell", :privileged => false, :inline => $mambaInstall
 
-  # Enable provisioning with chef solo, specifying a cookbooks path, roles
-  # path, and data_bags path (all relative to this Vagrantfile), and adding
-  # some recipes and/or roles.
-  #
-
-  # Define multiple boxes for the fuzzing cluster
+  # Dynamically define multiple fuzzing boxes for the cluster 
   MAMBA_CLUSTER_SIZE.times do |nodeNum|
 	config.vm.define "mamba-fuzzer-#{nodeNum}" do |node|
-	 node.vm.hostname = "mamba-fuzzer-#{nodeNum}" 
-	 # mamba-fuzzer-0 is always the fuzzing cluster master 
-	 # Setup the fuzzing job
-	 if node.vm.hostname == "mamba-fuzzer-0"
-		puts "Detected the master of the cluster"
-		node.vm.provision "shell", :privileged => false, :inline => $masterFuzzer
-	 else
-		node.vm.provision "shell", :privileged => false, :inline => $slaveFuzzer
-	 end
+	  node.vm.hostname = "mamba-fuzzer-#{nodeNum}" 
+	  node.vm.provision "shell", :privileged => false, :inline => $fuzzer
 	end
   end
 
